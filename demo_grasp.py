@@ -39,6 +39,8 @@ from isaacsim.robot.manipulators.examples.franka import Franka
 from isaacsim.robot.manipulators.examples.franka.controllers import PickPlaceController
 from isaacsim.robot.manipulators.examples.franka.controllers.rmpflow_controller import RMPFlowController
 from isaacsim.core.utils.types import ArticulationAction
+from isaacsim.core.utils.rotations import quat_to_rot_matrix
+import scipy.spatial.transform as tf
 from isaacsim.sensors.camera import Camera
 from pxr import UsdGeom, Gf, UsdPhysics
 
@@ -256,7 +258,7 @@ class GraspController:
         self.target_pos, self.target_rot = self.franka.gripper.get_world_pose()
         
         # 控制参数
-        self.action_scale = 0.05  # 增大动作缩放因子
+        self.action_scale = 0.5  # 大幅增加动作缩放因子
         self.gripper_threshold = 0.5
         self.gripper_open = True
         
@@ -265,9 +267,14 @@ class GraspController:
         self.current_instruction = instruction
         self.is_executing = True
         self.step_count = 0
+        
+        # 重置控制器状态
+        self.controller.reset()
+        
         # 重置目标为当前位置
         self.target_pos, self.target_rot = self.franka.gripper.get_world_pose()
         print(f"\n>>> 开始执行指令: {instruction}")
+        print(f"    初始位置: {self.target_pos}")
     
     def stop(self):
         """停止执行"""
@@ -282,24 +289,65 @@ class GraspController:
         
         self.step_count += 1
         
+        # 保存调试图像
+        if self.step_count % 10 == 0:
+            try:
+                img = Image.fromarray(camera_image)
+                img.save(f"debug_step_{self.step_count}.png")
+            except:
+                pass
+
         try:
             print(f"\n[Step {self.step_count}] 调用 OpenVLA...")
             action = self.vla_client.predict_action(camera_image, self.current_instruction)
             
             # 解析动作: [x, y, z, rx, ry, rz, gripper]
-            delta_pos = action[:3] * self.action_scale
-            # 暂时忽略旋转，只做位置控制
-            gripper_action = action[6]
+            # OpenVLA 输出通常是相对末端执行器坐标系的
+            # 使用 self.action_scale (0.5) 而不是硬编码的 0.05
+            delta_pos_local = action[:3] * self.action_scale
+            delta_rpy_local = action[3:6] * self.action_scale
             
-            print(f"  动作: Δpos={delta_pos}, gripper={gripper_action:.2f}")
+            # 获取当前 EE 姿态 (Isaac Sim 返回 [w, x, y, z])
+            ee_pos, ee_quat = self.franka.gripper.get_world_pose()
             
-            # 更新目标位置
-            self.target_pos = self.target_pos + delta_pos
+            # --- 位置更新 ---
+            # 将四元数转为旋转矩阵
+            rot_matrix = quat_to_rot_matrix(ee_quat)
+            
+            # 将局部位移转换到世界坐标系
+            delta_pos_world = rot_matrix @ delta_pos_local
+            
+            # 更新目标位置 (基于当前真实位置累加)
+            self.target_pos = ee_pos + delta_pos_world
             
             # 限制工作空间
             self.target_pos = np.clip(self.target_pos, 
                                  [0.2, -0.5, 0.05],
                                  [0.8, 0.5, 0.6])
+
+            # --- 旋转更新 ---
+            # Scipy Rotation 使用 [x, y, z, w] 格式
+            # Isaac Sim 使用 [w, x, y, z] 格式
+            current_quat_scipy = np.array([ee_quat[1], ee_quat[2], ee_quat[3], ee_quat[0]])
+            current_rot = tf.Rotation.from_quat(current_quat_scipy)
+            
+            # 计算相对旋转 (假设 VLA 输出为 XYZ 欧拉角)
+            delta_rot = tf.Rotation.from_euler('xyz', delta_rpy_local)
+            
+            # 应用旋转: New = Current * Delta (局部坐标系下的旋转)
+            new_rot = current_rot * delta_rot
+            
+            # 转回 Isaac Sim 格式 [w, x, y, z]
+            new_quat_scipy = new_rot.as_quat() # [x, y, z, w]
+            self.target_rot = np.array([new_quat_scipy[3], new_quat_scipy[0], new_quat_scipy[1], new_quat_scipy[2]])
+
+            # --- 夹爪控制 ---
+            gripper_action = action[6]
+            
+            print(f"  Raw Action: {action[:3]}")
+            print(f"  动作(Local): {delta_pos_local}")
+            print(f"  动作(World): {delta_pos_world}")
+            print(f"  Gripper: {gripper_action:.2f}")
             
             # 更新夹爪状态
             if gripper_action > self.gripper_threshold:
