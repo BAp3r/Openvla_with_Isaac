@@ -41,8 +41,7 @@ from isaacsim.robot.manipulators.examples.franka.controllers.rmpflow_controller 
 from isaacsim.core.utils.types import ArticulationAction
 from isaacsim.core.utils.rotations import quat_to_rot_matrix
 import scipy.spatial.transform as tf
-from isaacsim.sensors.camera import Camera
-from pxr import UsdGeom, Gf, UsdPhysics
+from pxr import UsdGeom, Gf, UsdPhysics, UsdLux
 
 # ===================== OpenVLA 客户端 =====================
 class OpenVLAClient:
@@ -109,6 +108,31 @@ class OpenVLAClient:
 # ===================== 场景构建 =====================
 def create_scene(world: World):
     """创建演示场景: 桌子 + 香蕉 + 苹果"""
+    
+    # ===== 添加光源 (必须！否则相机图像全黑) =====
+    import omni.usd
+    from pxr import UsdLux, UsdGeom, Gf
+    
+    stage = omni.usd.get_context().get_stage()
+    
+    # 1. Dome Light (环境光)
+    dome_light = UsdLux.DomeLight.Define(stage, "/World/DomeLight")
+    dome_light.GetIntensityAttr().Set(1000)
+    
+    # 2. Distant Light (平行光/太阳光)
+    distant_light = UsdLux.DistantLight.Define(stage, "/World/DistantLight")
+    distant_light.GetIntensityAttr().Set(3000)
+    xform = UsdGeom.Xformable(distant_light.GetPrim())
+    xform.AddRotateXYZOp().Set(Gf.Vec3d(-45, 30, 0))
+    
+    # 3. Sphere Light (补充光源)
+    sphere_light = UsdLux.SphereLight.Define(stage, "/World/SphereLight")
+    sphere_light.GetIntensityAttr().Set(5000)
+    sphere_light.GetRadiusAttr().Set(0.1)
+    xform = UsdGeom.Xformable(sphere_light.GetPrim())
+    xform.AddTranslateOp().Set(Gf.Vec3d(0.5, 0.5, 1.0))
+    
+    print("  ✓ 光源已添加 (DomeLight + DistantLight + SphereLight)")
     
     # 添加地面（使用固定立方体，避免依赖官方 GroundPlane 资产）
     world.scene.add(
@@ -209,28 +233,35 @@ def create_scene(world: World):
         )
     
     # ===== 相机 (第三人称视角) =====
-    camera = Camera(
-        prim_path="/World/Camera",
-        position=np.array([1.2, 0.0, 0.8]),
-        frequency=30,
-        resolution=(256, 256),
-        orientation=np.array([0.5, -0.5, 0.5, -0.5])  # 朝向桌面
-    )
-    camera.initialize()
-    camera.add_motion_vectors_to_frame()
+    # 使用 USD 创建相机并设置为 Viewport 视角
+    import omni.usd
+    from pxr import UsdGeom
+    
+    stage = omni.usd.get_context().get_stage()
+    camera_path = "/World/VLACamera"
+    camera_prim = stage.DefinePrim(camera_path, "Camera")
+    usd_camera = UsdGeom.Camera(camera_prim)
+    usd_camera.GetFocalLengthAttr().Set(18.0)  # 广角
+    usd_camera.GetHorizontalApertureAttr().Set(20.955)
+    
+    # 设置相机位置
+    xform = UsdGeom.Xformable(camera_prim)
+    xform.ClearXformOpOrder()
+    xform.AddTranslateOp().Set(Gf.Vec3d(1.2, 0.0, 0.8))
+    xform.AddRotateXYZOp().Set(Gf.Vec3d(-40, 0, 0))  # 俯视角度
     
     print("\n✓ 场景创建完成:")
     print("  - 桌子: 棕色木桌")
     print("  - 香蕉: 黄色 (位于桌面左侧)")
     print("  - 苹果: 红色 (位于桌面右侧)")
     print("  - Franka Panda: 7-DoF 机械臂")
-    print("  - 相机: 第三人称视角")
+    print("  - 相机: 第三人称视角 (VLACamera)")
     
     return {
         "franka": franka,
         "banana": banana,
         "apple": apple,
-        "camera": camera,
+        "camera_path": camera_path,  # 返回相机路径而不是 Camera 对象
         "table_height": table_height
     }
 
@@ -292,10 +323,16 @@ class GraspController:
         # 保存调试图像
         if self.step_count % 10 == 0:
             try:
-                img = Image.fromarray(camera_image)
+                debug_img = camera_image
+                if debug_img.dtype != np.uint8:
+                    debug_img = np.clip(debug_img, 0.0, None)
+                    if debug_img.max() > 0:
+                        debug_img = debug_img / debug_img.max()
+                    debug_img = (debug_img * 255).astype(np.uint8)
+                img = Image.fromarray(debug_img)
                 img.save(f"debug_step_{self.step_count}.png")
-            except:
-                pass
+            except Exception as e:
+                print(f"  调试图像保存失败: {e}")
 
         try:
             print(f"\n[Step {self.step_count}] 调用 OpenVLA...")
@@ -439,7 +476,7 @@ def main():
     # 创建场景
     scene_objects = create_scene(world)
     franka = scene_objects["franka"]
-    camera = scene_objects["camera"]
+    camera_path = scene_objects["camera_path"]
     
     # 初始化 OpenVLA 客户端
     print("\n正在连接 OpenVLA 服务器...")
@@ -454,10 +491,65 @@ def main():
     # 重置仿真
     world.reset()
     
+    # ===== 设置 Viewport 使用我们的相机 =====
+    print("\n设置 Viewport 相机...")
+    import omni.kit.viewport.utility as vp_util
+    
+    viewport_api = vp_util.get_active_viewport()
+    if viewport_api:
+        viewport_api.set_active_camera(camera_path)
+        print(f"  ✓ Viewport 已切换到相机: {camera_path}")
+    else:
+        print("  ⚠ 无法获取 Viewport")
+    
     # 等待场景稳定
     print("\n等待场景稳定...")
-    for _ in range(100):
+    for i in range(100):
         world.step(render=True)
+        if i % 25 == 0:
+            print(f"  预热进度: {i}/100")
+    
+    # ===== 创建用于截图的函数 =====
+    import tempfile
+    import omni.kit.viewport.utility as vp_util
+    
+    def capture_viewport_image(size=(256, 256)):
+        """从 Viewport 截取图像"""
+        try:
+            viewport_api = vp_util.get_active_viewport()
+            if viewport_api is None:
+                return None
+            
+            # 使用临时文件
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
+                temp_path = f.name
+            
+            # 截图到文件
+            from omni.kit.viewport.utility import capture_viewport_to_file
+            capture_viewport_to_file(viewport_api, temp_path)
+            
+            # 读取并调整大小
+            img = Image.open(temp_path)
+            img = img.resize(size, Image.LANCZOS)
+            img_array = np.array(img)[:, :, :3]  # 只取 RGB
+            
+            # 删除临时文件
+            os.unlink(temp_path)
+            
+            return img_array
+        except Exception as e:
+            print(f"  截图错误: {e}")
+            return None
+    
+    # 测试截图
+    print("\n测试相机截图...")
+    test_img = capture_viewport_image()
+    if test_img is not None:
+        print(f"  ✓ 截图成功 - 尺寸: {test_img.shape}, 值范围: [{test_img.min()}, {test_img.max()}]")
+        Image.fromarray(test_img).save("debug_camera_test.png")
+        print("  ✓ 测试图像已保存: debug_camera_test.png")
+    else:
+        print("  ⚠ 截图失败")
     
     print("\n✓ 仿真已启动，等待指令...")
     
@@ -492,14 +584,11 @@ def main():
         
         # 获取相机图像并更新目标（低频）
         if frame_count % 5 == 0:  # 降低相机采集频率
-            try:
-                camera_image = camera.get_rgba()
-                if camera_image is not None:
-                    # 转换为 RGB
-                    camera_image = camera_image[:, :, :3]
-                    grasp_controller.update_target(camera_image)
-            except Exception as e:
-                pass  # 忽略相机错误
+            camera_image = capture_viewport_image()
+            if camera_image is not None and camera_image.max() > 0:
+                grasp_controller.update_target(camera_image)
+            elif frame_count % 50 == 0:
+                print("  ⚠ 相机图像无效，跳过 VLA 调用")
     
     # 清理
     input_handler.stop()
