@@ -1,0 +1,18 @@
+# OpenVLA Server 配置
+
+# 模型配置
+model:
+  path: "/home/wuyou/code1/openvla/openvla-7b"
+  device: "cuda:0"
+  unnorm_key: "bridge_orig"
+  enable_torch_compile: false
+
+# 服务器配置
+server:
+  host: "0.0.0.0"
+  port: 8000
+
+# 推理配置
+inference:
+  timeout: 30
+  max_tokens: 256

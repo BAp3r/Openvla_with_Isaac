@@ -1,0 +1,60 @@
+# Isaac Sim 场景配置
+
+# 仿真配置
+simulation:
+  headless: false
+  width: 1280
+  height: 720
+  window_width: 1920
+  window_height: 1080
+  assets_path: "/home/wuyou/Data1/isaac_sim_assets/Assets/Isaac/5.1"
+
+# 场景配置
+scene:
+  table_height: 0.4
+  
+  # 物体位置
+  objects:
+    banana:
+      position: [0.4, -0.1, 0.43]
+      scale: [0.12, 0.03, 0.03]
+      color: [1.0, 0.9, 0.0]
+      mass: 0.1
+    apple:
+      position: [0.5, 0.15, 0.43]
+      scale: [0.05, 0.05, 0.05]
+      color: [0.9, 0.1, 0.1]
+      mass: 0.15
+
+# 相机配置
+camera:
+  path: "/World/VLACamera"
+  position: [1.2, 0.0, 0.8]
+  rotation: [-40, 0, 0]
+  focal_length: 18.0
+  resolution: [256, 256]
+
+# 机器人配置
+robot:
+  name: "franka"
+  position: [0.0, 0.0, 0.0]
+
+# 控制器配置
+controller:
+  action_scale: 0.5
+  gripper_threshold: 0.5
+  workspace_limits:
+    min: [0.2, -0.5, 0.05]
+    max: [0.8, 0.5, 0.6]
+
+# 光源配置
+lights:
+  dome:
+    intensity: 1000
+  distant:
+    intensity: 3000
+    rotation: [-45, 30, 0]
+  sphere:
+    intensity: 5000
+    radius: 0.1
+    position: [0.5, 0.5, 1.0]

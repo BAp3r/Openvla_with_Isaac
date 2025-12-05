@@ -1,5 +1,21 @@
 # OpenVLA IsaacSim 调试踩坑记录
 
+## 项目重构 (2025-12-05)
+
+### 新目录结构
+```
+openvla_isaac/
+├── configs/           # 配置文件
+├── scripts/           # 启动脚本  
+├── src/
+│   ├── server/        # OpenVLA API 服务
+│   ├── isaac/         # Isaac Sim 仿真模块
+│   ├── clients/       # API 客户端
+│   └── utils/         # 工具函数
+```
+
+---
+
 ## 1. 相机图像全黑/全白/全灰
 - **原因**：
   - 没有添加光源，场景无照明导致全黑。

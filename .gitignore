@@ -1,0 +1,29 @@
+# 忽略调试输出
+debug_*.png
+*.npy
+output.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 环境
+.env
+venv/
+env/
+
+# 日志
+logs/
+*.log
